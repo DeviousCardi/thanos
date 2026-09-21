@@ -305,8 +305,14 @@ func newDedupSeriesIterator(a, b adjustableSeriesIterator) *dedupSeriesIterator 
 func (it *dedupSeriesIterator) Next() chunkenc.ValueType {
 	lastFloatVal, isFloatVal := it.lastFloatVal()
 	lastUseA := it.useA
+	// If we have not emitted any sample yet, lastIter/useA are merely the initial
+	// defaults set in newDedupSeriesIterator and do not represent a replica we
+	// actually read a value from. Treating that as a replica switch would apply a
+	// bogus counter adjustment based on a value that was never emitted, flattening
+	// the counter at the start of the window (https://github.com/thanos-io/thanos/issues/9034).
+	emittedAny := it.lastT != math.MinInt64
 	defer func() {
-		if it.useA != lastUseA && isFloatVal {
+		if emittedAny && it.useA != lastUseA && isFloatVal {
 			// We switched replicas.
 			// Ensure values are correct bases on value before At.
 			// TODO(rabenhorst): Investigate if we also need to implement adjusting histograms here.

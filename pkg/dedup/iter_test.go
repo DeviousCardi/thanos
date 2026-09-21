@@ -620,6 +620,43 @@ func TestDedupSeriesSet(t *testing.T) {
 				},
 			},
 		},
+		{
+			// Regression test against https://github.com/thanos-io/thanos/issues/9034.
+			// The second replica ("b") holds the earliest sample of the window, which is
+			// what happens whenever a query-range split boundary lands between the two
+			// replicas' scrape offsets. newDedupSeriesIterator optimistically pre-seeds
+			// lastIter to "a" with useA=true before anything has been emitted, so the very
+			// first Next() looks like a replica switch away from "a" and used to inject a
+			// permanent errAdjust of (a's first value - b's first value) into "b",
+			// flattening the counter at the start of the window and making rate()
+			// under-report. Nothing was ever emitted from "a", so no adjustment is due and
+			// the values must come through untouched.
+			name:      "Regression test against 9034",
+			isCounter: true,
+			input: []series{
+				{
+					// Replica a: scraped 3s after replica b, so it never owns the first sample.
+					lset: labels.FromStrings("a", "1"),
+					samples: []sample{
+						{13000, 103}, {23000, 113}, {33000, 123}, {43000, 133}, {53000, 143},
+					},
+				}, {
+					// Replica b: holds the earliest sample of the window.
+					lset: labels.FromStrings("a", "1"),
+					samples: []sample{
+						{10000, 100}, {20000, 110}, {30000, 120}, {40000, 130}, {50000, 140},
+					},
+				},
+			},
+			exp: []series{
+				{
+					// Replica b wins every sample (it is always earlier and the penalty keeps
+					// a out), and its values must be unmodified: no errAdjust injected.
+					lset:    labels.FromStrings("a", "1"),
+					samples: []sample{{10000, 100}, {20000, 110}, {30000, 120}, {40000, 130}, {50000, 140}},
+				},
+			},
+		},
 	} {
 		t.Run(tcase.name, func(t *testing.T) {
 			// If it is a counter then pass a function which expects a counter.
